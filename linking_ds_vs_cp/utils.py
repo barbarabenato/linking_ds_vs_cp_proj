@@ -2,8 +2,12 @@ from tensorflow.keras.preprocessing.image import load_img
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+import cv2
 import os
-import sys
+import torch
+from torch.utils.data import TensorDataset, Dataset, DataLoader
+from copy import deepcopy
+from tqdm import tqdm
 
 
 def read_data_by_path(filename):
@@ -26,7 +30,7 @@ def read_data_by_path(filename):
     imgs = np.array([np.array(load_img(im))
         for im in imgfile],'f')
 
-    return imgfile, imgs, label
+    return np.asarray(imgfile), imgs, label
 
 def save_projection(filename, data, labels, samples):
     """ 
@@ -51,19 +55,45 @@ def save_projection(filename, data, labels, samples):
     plt.cla()
     plt.clf()
 
+class iftDataset(Dataset):
+    def __init__(self, image_paths, pseudolabels = None, transform=False):
+        self.image_paths = image_paths
+        self.transform = transform
+        self.pseudolabels = pseudolabels
+        
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        image_filepath = self.image_paths[idx]
+        image = cv2.imread(image_filepath)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        if self.pseudolabels is not None:
+            label = self.pseudolabels[idx]
+        else:
+            # ift dataset has labels from 1-n, and models consider label 0.
+            label = int(image_filepath.split('/')[-1].split('_')[0])  
+            label = label - 1
+
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        return image, label
+
 
 @torch.no_grad()
 def prepare_data_features(model, dataset, device, num_workers):
     # Prepare model
     network = deepcopy(model.convnet)
-    if layer=='backbone':
-        network.fc = nn.Identity()  # Removing projection head g(.)
+    #if layer=='backbone':
+    #    network.fc = nn.Identity()  # Removing projection head g(.)
 
     network.eval()
     network.to(device)
 
     # Encode all images
-    data_loader = data.DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, drop_last=False)
+    data_loader = DataLoader(dataset, batch_size=1, num_workers=num_workers, shuffle=False, drop_last=False)
     feats, labels = [], []
     for batch_imgs, batch_labels in tqdm(data_loader):
         batch_imgs = batch_imgs.to(device)
@@ -74,7 +104,7 @@ def prepare_data_features(model, dataset, device, num_workers):
     feats = torch.cat(feats, dim=0)
     labels = torch.cat(labels, dim=0)
 
-    return data.TensorDataset(feats, labels), feats.numpy(), labels.numpy()
+    return TensorDataset(feats, labels), feats.numpy(), labels.numpy()
 
 def make_feats_as_tensor(feats, labels):
     feats = torch.from_numpy(feats)

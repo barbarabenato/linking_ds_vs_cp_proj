@@ -1,9 +1,10 @@
 from utils import read_data_by_path
 from utils import save_projection
-from feature_learning import vgg16_learning
-from contrastive_learning import contr_learning
-from dim_red import dim_red
-from label_propag import OPFSemi
+from classifier_learning import vgg16_classification
+from feature_learning import learning_feature_space
+from dimensionality_reduction import reduce_to_2d
+from label_propagation import OPFSemi
+from sklearn.metrics import cohen_kappa_score, accuracy_score
 
 import numpy as np
 import os
@@ -18,31 +19,39 @@ dim_red_name = sys.argv[3]
 epochs = int(sys.argv[4])
 
 # params for vgg_learning batch size, number of epochs, and number of classes
-feat_learn_params = [32, 15, 10]
+class_learn_params = [32, 15, 10]
 
 # reading data
-imgfile, x, y = read_data_by_path('../BaseParasitos/parasites_focus_plane_divided/larvas/resized/')
+imgfile, original_img, _ = read_data_by_path('../data/')
 
 # randomly choosing the supervised samples
-idx_sup_samples = np.random.randint(0, high=x.shape[0], size=(int(x.shape[0]*perc_sup_samples),))
-idx_unsup_samples = np.diff(np.arange(0, high=x.shape[0]), idx_sup_samples)
+idx_sup_samples = np.random.choice(range(len(imgfile)), int(len(imgfile)*perc_sup_samples), replace=False)
+idx_unsup_samples = np.setdiff1d(np.arange(0, len(imgfile)),idx_sup_samples)
 
-# training deep feature learning with supervised samples in the first iteration
-print("[] contrastive learning")
-sup_X, sup_y, unsup_X, unsup_y = contr_learning(model_name, imgfile[idx_sup_samples], imgfile[idx_unsup_samples], feat_learn_params[2], epochs)
+# training deep feature learning with supervised samples 
+print("[] feature learning")
+X_sup, y_sup, X_unsup, y_unsup = learning_feature_space(model_name, imgfile[idx_sup_samples], imgfile[idx_unsup_samples], class_learn_params[2], epochs)
 
 # dimensionality reduction step 
 print("[] computing 2d projection")
-sup_X, unsup_X = dim_red(dim_red_name, sup_X, sup_y, unsup_X, unsup_y)
-feats_2d = np.concatenate((sup_X,unsup_X))
+feats_nd = np.concatenate((X_sup, X_unsup))
+feats_2d = reduce_to_2d(dim_red_name, feats_nd)
 
 # propagating labels with OPFSemi
 print("[] propagating labels")
-y_labeled = OPFSemi(feats_2d, y, idx_sup_samples)
+y = np.concatenate((y_sup, y_unsup))
 
-save_projection('output/2d_data.png', feats_2d, y_labeled, idx_sup_samples)
+y_labeled = OPFSemi(feats_2d, y, idx_sup_samples)
+save_projection('2d_data.png', feats_2d, y_labeled, idx_sup_samples)
 
 # learning vgg16 
-feats_nd = vgg16_learning(x, y_labeled, idx_sup_samples, batch=feat_learn_params[0], epochs=feat_learn_params[1], file_name='learning_curve_iter.png', n_classes=feat_learn_params[2])
+y_classified = vgg16_classification(original_img, y_labeled, class_learn_params, file_name='learning_curve.png')
 
+prop_acc = accuracy_score(y, y_labeled)
+prop_kappa = cohen_kappa_score(y, y_labeled)
+print("Propagation acc: %f\nPropagation kappa: %f" % (prop_acc, prop_kappa))
+
+acc = accuracy_score(y, y_classified)
+kappa = cohen_kappa_score(y, y_classified)
+print("Classification acc: %f\nClassification kappa: %f" % (acc, kappa))
 
